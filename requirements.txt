@@ -1,0 +1,38 @@
+# Core application dependencies
+pandas>=1.5.0
+requests>=2.28.0
+streamlit>=1.28.0
+python-barcode>=0.14.0
+Pillow>=9.0.0
+
+# Performance optimization dependencies
+orjson>=3.9.0          # Fast JSON processing (2-5x faster than standard json)
+aiohttp>=3.8.0         # Async HTTP client for improved I/O performance
+psutil>=5.9.0          # System monitoring and resource tracking
+urllib3>=1.26.0        # Enhanced HTTP connection pooling
+
+# Optional performance profiling dependencies
+memory-profiler>=0.60.0 # Memory usage profiling (optional)
+line-profiler>=4.0.0   # Line-by-line profiling (optional)
+
+# Standard library enhancements
+numpy>=1.24.0          # Optimized numerical operations for pandas
+typing-extensions>=4.0.0  # Enhanced type hints support
+
+# Logging and monitoring
+python-json-logger>=2.0.0  # Structured JSON logging (optional)
+
+# Development and testing (optional)
+pytest>=7.0.0          # Testing framework
+pytest-cov>=4.0.0      # Coverage testing
+black>=22.0.0          # Code formatting
+flake8>=5.0.0          # Code linting
+
+# Web dependencies for Streamlit
+watchdog>=2.1.0        # File system monitoring for Streamlit
+click>=8.0.0           # Command line interface utilities
+tornado>=6.2.0         # Web server for Streamlit
+
+# Additional utilities
+python-dateutil>=2.8.0  # Enhanced date/time handling
+pytz>=2022.1           # Timezone handling
