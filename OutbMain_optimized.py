@@ -51,7 +51,7 @@ config.log_configuration()
 
 @profile_critical
 def obtener_datos_estado(estado: str, headers: dict) -> pd.DataFrame:
-    """Optimized function to get order data by status"""
+    """Optimized function to get order data by status (supports multiple statuses separated by |)"""
     base_url = "http://api-cqrs-wmxp001-wmx.am.gxo.com/queryservice/data/57585f4f52444552/4144445453/66616c7365/31/3330"
     columnas = ['ORDERKEY', 'SITEID', 'CLIENTID', 'EXTERNKEY', 'ORDERDATE', 
                 'ORDERGROUP', 'PLANDELIVERYDATE', 'STATUS', 'STATUSTS', 'EDITWHO', 'TOTALORDERQTY']
@@ -62,25 +62,57 @@ def obtener_datos_estado(estado: str, headers: dict) -> pd.DataFrame:
         try:
             logger.info(f"Fetching data for status: {estado}")
             
-            response = http_client.put(
-                base_url,
-                json={"STATUS": estado},
-                headers=headers
-            )
+            # Handle multiple statuses separated by |
+            if '|' in estado:
+                all_dfs = []
+                for single_status in estado.split('|'):
+                    single_status = single_status.strip()
+                    response = http_client.put(
+                        base_url,
+                        json={"STATUS": single_status},
+                        headers=headers
+                    )
+                    
+                    logger.info(f"Response for status {single_status}: {response.status_code}")
+                    
+                    if response.status_code == 200:
+                        # Use optimized JSON parsing
+                        datos = FastJSON.loads(response.text)
+                        data_list = datos['Data'] if isinstance(datos['Data'], list) else [datos['Data']]
+                        
+                        if data_list and data_list[0]:  # Check if data exists
+                            df_single = pd.DataFrame(data_list)[columnas]
+                            all_dfs.append(df_single)
+                
+                if all_dfs:
+                    # Combine all DataFrames
+                    df = pd.concat(all_dfs, ignore_index=True)
+                else:
+                    df = pd.DataFrame(columns=columnas)
+            else:
+                # Single status
+                response = http_client.put(
+                    base_url,
+                    json={"STATUS": estado},
+                    headers=headers
+                )
+                
+                logger.info(f"Response: {response.status_code}")
+                
+                if response.status_code != 200:
+                    logger.warning(f"Non-200 response: {response.status_code} - {response.text}")
+                    return pd.DataFrame()
+                
+                # Use optimized JSON parsing
+                datos = FastJSON.loads(response.text)
+                data_list = datos['Data'] if isinstance(datos['Data'], list) else [datos['Data']]
+                
+                # Create DataFrame
+                df = pd.DataFrame(data_list)[columnas]
             
-            logger.info(f"Response: {response.status_code}")
-            
-            if response.status_code != 200:
-                logger.warning(f"Non-200 response: {response.status_code} - {response.text}")
-                return pd.DataFrame()
-            
-            # Use optimized JSON parsing
-            datos = FastJSON.loads(response.text)
-            data_list = datos['Data'] if isinstance(datos['Data'], list) else [datos['Data']]
-            
-            # Create DataFrame with optimized dtypes
-            df = pd.DataFrame(data_list)[columnas]
-            df = df_optimizer.optimize_dtypes(df)
+            # Optimize DataFrame dtypes
+            if not df.empty:
+                df = df_optimizer.optimize_dtypes(df)
             
             # Optimize string operations
             df['ORDERKEY'] = df['ORDERKEY'].astype(str)
@@ -654,16 +686,11 @@ if config.ENABLE_PROFILING:
 
 st.title("🚀 Picking List WMX - Optimized")
 
-# Performance indicator
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    st.metric("Cache Size", api_cache.stats()['size'])
-with col2:
-    st.metric("Cache Hit Ratio", f"{api_cache.stats()['hit_ratio']:.2%}")
-with col3:
-    st.metric("Functions Monitored", len(performance_monitor.function_stats))
-with col4:
-    st.metric("Slow Functions", len(performance_monitor.slow_functions))
+# Add logo if available
+try:
+    st.image("logo.png", width=200)
+except:
+    pass  # Logo not found, continue without it
 
 # Create tabs
 tab1, tab2, tab3, tab_debug, tab_performance = st.tabs([
@@ -939,6 +966,19 @@ with tab1:
 with tab_performance:
     st.subheader("📊 Performance Monitoring")
     
+    # Performance indicator metrics at the top of Performance tab
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Cache Size", api_cache.stats()['size'])
+    with col2:
+        st.metric("Cache Hit Ratio", f"{api_cache.stats()['hit_ratio']:.2%}")
+    with col3:
+        st.metric("Functions Monitored", len(performance_monitor.function_stats))
+    with col4:
+        st.metric("Slow Functions", len(performance_monitor.slow_functions))
+    
+    st.divider()
+    
     if config.ENABLE_PROFILING:
         col1, col2 = st.columns(2)
         
@@ -1016,8 +1056,152 @@ with tab_performance:
     else:
         st.info("Performance monitoring is disabled. Enable it in configuration to see detailed metrics.")
 
-# The remaining tabs (tab2, tab3, tab_debug) follow the same pattern as the original
-# but with optimized function calls and better error handling
+# --- NUEVO: Pestaña de Reimpresión ---
+with tab2:
+    st.subheader("Órdenes ya procesadas (para reimpresión)")
+    df_reimp = obtener_datos_estado("130|150|145", headersWMX)
+    if df_reimp.empty:
+        st.info("No hay órdenes procesadas para reimprimir.")
+    else:
+        st.dataframe(df_reimp, use_container_width=True)
+        opciones_reimp = [f"EXTERNALKEY {row['EXTERNKEY']} / / / ORDERKEY ({row['ORDERKEY']})" for _, row in df_reimp.iterrows()]
+        idx_reimp = st.selectbox("Selecciona una orden para reimprimir", options=list(range(len(opciones_reimp))), format_func=lambda i: opciones_reimp[i], key="reimp_idx")
+        row_reimp = df_reimp.iloc[idx_reimp]
+        orderkey_reimp = row_reimp['ORDERKEY']
+        orderkey_hex_reimp = row_reimp['HEXORDER']
+        usuario_reimp = row_reimp.get('EDITWHO', '')
+        st.write(f"Seleccionada: {row_reimp['EXTERNKEY']} ({orderkey_reimp})")
+        # Consultas y respuestas
+        st.markdown("### Respuestas de consultas para esta orden:")
+        # Consulta detalle
+        detalle = procesar_orden(orderkey_hex_reimp, headersWMX)
+        st.write("Detalle de la orden:")
+        st.dataframe(detalle, use_container_width=True)
+        # Consulta picks
+        picks = paso_consulta(orderkey_reimp, headersWMX, tipo='pick')
+
+        # Consulta cases
+        cases = paso_consulta(orderkey_reimp, headersWMX, tipo='case')
+
+        # Botón de reimpresión
+        if st.button("Reimprimir Picking List"):
+            datos_etiqueta = obtener_datos_etiqueta(orderkey_hex_reimp, headersWMX, row_reimp['EXTERNKEY'])
+            if not datos_etiqueta:
+                st.error("No se encontraron datos para la etiqueta")
+            else:
+                filtrados = filtrar_sku(datos_etiqueta)
+                html_etiqueta = generar_html_etiqueta(filtrados, orderkey_reimp, row_reimp['EXTERNKEY'])
+                st.download_button(f"Descargar Picking List {orderkey_reimp}", data=html_etiqueta, file_name=f"PickingList_{orderkey_reimp}_reimp.html", mime="text/html")
+
+with tab3:
+    st.subheader("Buscar por OrderKey específico")
+    orderkey_buscar = st.text_input("Introduce el OrderKey a buscar", "")
+    if orderkey_buscar:
+        # Consulta por OrderKey (no por status)
+        try:
+            base_url = "http://api-cqrs-wmxp001-wmx.am.gxo.com/queryservice/data/57585f4f52444552/4144445453/66616c7365/31/3330"
+            columnas = ['ORDERKEY', 'SITEID', 'CLIENTID', 'EXTERNKEY', 'ORDERDATE', 'ORDERGROUP', 'PLANDELIVERYDATE', 'STATUS', 'STATUSTS', 'EDITWHO', 'TOTALORDERQTY']
+            log_msg = f"[LOG] PUT {base_url} buscando ORDERKEY: {orderkey_buscar}"
+            print(log_msg)
+            logging.info(log_msg)
+            response = http_client.put(
+                base_url,
+                json={"ORDERKEY": orderkey_buscar},
+                headers=headersWMX
+            )
+            log_msg = f"[LOG] Respuesta: {response.status_code} {response.text}"
+            print(log_msg)
+            logging.info(log_msg)
+            if response.status_code == 200:
+                datos = FastJSON.loads(response.text)
+                data_list = datos['Data'] if isinstance(datos['Data'], list) else [datos['Data']]
+                if data_list and data_list[0].get('ORDERKEY'):
+                    df_okey = pd.DataFrame(data_list)[columnas]
+                    df_okey['ORDERKEY'] = df_okey['ORDERKEY'].astype(str)
+                    df_okey['HEXORDER'] = df_okey['ORDERKEY'].apply(lambda s: ''.join(f"{ord(c):02X}" for c in s))
+                    st.dataframe(df_okey, use_container_width=True)
+                    row_okey = df_okey.iloc[0]
+                    orderkey = row_okey['ORDERKEY']
+                    orderkey_hex = row_okey['HEXORDER']
+                    usuario = row_okey.get('EDITWHO', '')
+                    st.write(f"Seleccionada: {row_okey['EXTERNKEY']} ({orderkey})")
+                    st.markdown("### Respuestas de consultas para este OrderKey:")
+                    detalle = procesar_orden(orderkey_hex, headersWMX)
+                    st.write("Detalle de la orden:")
+                    st.dataframe(detalle, use_container_width=True)
+                    picks = paso_consulta(orderkey, headersWMX, tipo='pick')
+                    #st.write("Picks:")
+                    #st.write(picks)
+                    cases = paso_consulta(orderkey, headersWMX, tipo='case')
+                    #st.write("Cases:")
+                    #st.write(cases)
+                    if st.button("Reimprimir Picking List", key="reimp_orderkey"):
+                        datos_etiqueta = obtener_datos_etiqueta(orderkey_hex, headersWMX, row_okey['EXTERNKEY'])
+                        if not datos_etiqueta:
+                            st.error("No se encontraron datos para la etiqueta")
+                        else:
+                            filtrados = filtrar_sku(datos_etiqueta)
+                            html_etiqueta = generar_html_etiqueta(filtrados, orderkey, row_okey['EXTERNKEY'])
+                            st.download_button(f"Descargar Picking List {orderkey}", data=html_etiqueta, file_name=f"PickingList_{orderkey}_busqueda.html", mime="text/html")
+                else:
+                    st.info("No se encontró ninguna orden con ese OrderKey.")
+            else:
+                st.error("Error en la consulta. Verifica el OrderKey.")
+        except Exception as e:
+            st.error(f"Error en la consulta: {e}")
+
+with tab_debug:
+    st.subheader("Debug de generación de etiqueta (por OrderKey)")
+    orderkey_debug = st.text_input("OrderKey para debug", "")
+    if orderkey_debug:
+        try:
+            base_url = "http://api-cqrs-wmxp001-wmx.am.gxo.com/queryservice/data/57585f4f52444552/4144445453/66616c7365/31/3330"
+            columnas = ['ORDERKEY', 'SITEID', 'CLIENTID', 'EXTERNKEY', 'ORDERDATE', 'ORDERGROUP', 'PLANDELIVERYDATE', 'STATUS', 'STATUSTS', 'EDITWHO', 'TOTALORDERQTY']
+            log_msg = f"[DEBUG] PUT {base_url} buscando ORDERKEY: {orderkey_debug}"
+            print(log_msg)
+            logging.info(log_msg)
+            response = http_client.put(
+                base_url,
+                json={"ORDERKEY": orderkey_debug},
+                headers=headersWMX
+            )
+            log_msg = f"[DEBUG] Respuesta: {response.status_code} {response.text}"
+            print(log_msg)
+            logging.info(log_msg)
+            if response.status_code == 200:
+                datos = FastJSON.loads(response.text)
+                data_list = datos['Data'] if isinstance(datos['Data'], list) else [datos['Data']]
+                if data_list and data_list[0].get('ORDERKEY'):
+                    df_okey = pd.DataFrame(data_list)[columnas]
+                    df_okey['ORDERKEY'] = df_okey['ORDERKEY'].astype(str)
+                    df_okey['HEXORDER'] = df_okey['ORDERKEY'].apply(lambda s: ''.join(f"{ord(c):02X}" for c in s))
+                    st.dataframe(df_okey, use_container_width=True)
+                    row_okey = df_okey.iloc[0]
+                    orderkey = row_okey['ORDERKEY']
+                    orderkey_hex = row_okey['HEXORDER']
+                    usuario = row_okey.get('EDITWHO', '')
+                    st.write(f"Seleccionada: {row_okey['EXTERNKEY']} ({orderkey})")
+                    st.markdown("### 1. Datos crudos de la orden:")
+                    detalle = procesar_orden(orderkey_hex, headersWMX)
+                    st.dataframe(detalle, use_container_width=True)
+                    st.markdown("### 2. Datos de inventario obtenidos para cada SKU:")
+                    datos_etiqueta = obtener_datos_etiqueta(orderkey_hex, headersWMX, row_okey['EXTERNKEY'])
+                    st.write(datos_etiqueta)
+                    st.markdown(f"Total registros inventario: {len(datos_etiqueta)}")
+                    st.markdown("### 3. Datos después de filtrar_sku:")
+                    filtrados = filtrar_sku(datos_etiqueta)
+                    st.write(filtrados)
+                    st.markdown(f"Total registros filtrados: {len(filtrados)}")
+                    st.markdown("### 4. HTML generado (preview):")
+                    html_etiqueta = generar_html_etiqueta(filtrados, orderkey, row_okey['EXTERNKEY'])
+                    st.download_button(f"Descargar HTML Debug {orderkey}", data=html_etiqueta, file_name=f"PickingList_{orderkey}_debug.html", mime="text/html")
+                    st.code(html_etiqueta[:2000] + ("..." if len(html_etiqueta) > 2000 else ""), language="html")
+                else:
+                    st.info("No se encontró ninguna orden con ese OrderKey.")
+            else:
+                st.error("Error en la consulta. Verifica el OrderKey.")
+        except Exception as e:
+            st.error(f"Error en la consulta: {e}")
 
 # At the end of the application, log performance summary
 if config.ENABLE_PROFILING:
