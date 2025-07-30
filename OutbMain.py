@@ -29,27 +29,62 @@ def obtener_datos_estado(estado: str, headers: dict):
     columnas = ['ORDERKEY', 'SITEID', 'CLIENTID', 'EXTERNKEY', 'ORDERDATE', 
                 'ORDERGROUP', 'PLANDELIVERYDATE', 'STATUS', 'STATUSTS', 'EDITWHO', 'TOTALORDERQTY']
     try:
-        log_msg = f"[LOG] PUT {base_url}\nHeaders: {headers}\nBody: {{'STATUS': '{estado}'}}"
-        print(log_msg)
-        logging.info(log_msg)
-        response = requests.put(
-            base_url,
-            json={"STATUS": estado},
-            headers=headers,
-            timeout=10
-        )
-        log_msg = f"[LOG] Respuesta: {response.status_code} {response.text}"
-        print(log_msg)
-        logging.info(log_msg)
-        if response.status_code != 200:
-            return pd.DataFrame()
-        datos = response.json()
-        data_list = datos['Data'] if isinstance(datos['Data'], list) else [datos['Data']]
-        df = pd.DataFrame(data_list)[columnas]
-        df['ORDERKEY'] = df['ORDERKEY'].astype(str)
-        df['HEXORDER'] = df['ORDERKEY'].apply(lambda s: ''.join(f"{ord(c):02X}" for c in s))
-        logging.info(f"[LOG] DataFrame generado: {df}")
-        print(df)
+        # Handle multiple statuses separated by |
+        if '|' in estado:
+            all_dfs = []
+            for single_status in estado.split('|'):
+                single_status = single_status.strip()
+                log_msg = f"[LOG] PUT {base_url}\nHeaders: {headers}\nBody: {{'STATUS': '{single_status}'}}"
+                print(log_msg)
+                logging.info(log_msg)
+                response = requests.put(
+                    base_url,
+                    json={"STATUS": single_status},
+                    headers=headers,
+                    timeout=10
+                )
+                log_msg = f"[LOG] Respuesta para {single_status}: {response.status_code} {response.text}"
+                print(log_msg)
+                logging.info(log_msg)
+                if response.status_code == 200:
+                    datos = response.json()
+                    data_list = datos['Data'] if isinstance(datos['Data'], list) else [datos['Data']]
+                    if data_list and data_list[0]:  # Check if data exists
+                        df_single = pd.DataFrame(data_list)[columnas]
+                        all_dfs.append(df_single)
+            
+            if all_dfs:
+                # Combine all DataFrames
+                df = pd.concat(all_dfs, ignore_index=True)
+            else:
+                df = pd.DataFrame(columns=columnas)
+        else:
+            # Single status (original logic)
+            log_msg = f"[LOG] PUT {base_url}\nHeaders: {headers}\nBody: {{'STATUS': '{estado}'}}"
+            print(log_msg)
+            logging.info(log_msg)
+            response = requests.put(
+                base_url,
+                json={"STATUS": estado},
+                headers=headers,
+                timeout=10
+            )
+            log_msg = f"[LOG] Respuesta: {response.status_code} {response.text}"
+            print(log_msg)
+            logging.info(log_msg)
+            if response.status_code != 200:
+                return pd.DataFrame()
+            datos = response.json()
+            data_list = datos['Data'] if isinstance(datos['Data'], list) else [datos['Data']]
+            df = pd.DataFrame(data_list)[columnas]
+        
+        # Common processing for both single and multiple statuses
+        if not df.empty:
+            df['ORDERKEY'] = df['ORDERKEY'].astype(str)
+            df['HEXORDER'] = df['ORDERKEY'].apply(lambda s: ''.join(f"{ord(c):02X}" for c in s))
+        
+        logging.info(f"[LOG] DataFrame generado: {len(df)} registros")
+        print(f"DataFrame generado con {len(df)} registros")
         return df
     except Exception as e:
         logging.error(f"[ERROR] obtener_datos_estado: {e}")
@@ -395,6 +430,13 @@ def obtener_datos_etiqueta(orderkey_hex, headers, externalkey=None):
 # --- FIN FLUJO DE DATOS PARA ETIQUETA DE INVENTARIO ---
 
 st.set_page_config(page_title="Picking List WMX", layout="wide")
+
+# Add logo if available
+try:
+    st.image("logo.png", width=200)
+except:
+    pass  # Logo not found, continue without it
+
 st.title("Picking List WMX")
 
 # --- NUEVO: Pestañas para impresión y reimpresión ---
@@ -538,12 +580,12 @@ with tab1:
 # --- NUEVO: Pestaña de Reimpresión ---
 with tab2:
     st.subheader("Órdenes ya procesadas (para reimpresión)")
-    df_reimp = obtener_datos_estado("130", headersWMX)
+    df_reimp = obtener_datos_estado("130|150|145", headersWMX)
     if df_reimp.empty:
         st.info("No hay órdenes procesadas para reimprimir.")
     else:
         st.dataframe(df_reimp, use_container_width=True)
-        opciones_reimp = [f"{row['EXTERNKEY']} ({row['ORDERKEY']})" for _, row in df_reimp.iterrows()]
+        opciones_reimp = [f"EXTERNALKEY {row['EXTERNKEY']} / / / ORDERKEY ({row['ORDERKEY']})" for _, row in df_reimp.iterrows()]
         idx_reimp = st.selectbox("Selecciona una orden para reimprimir", options=list(range(len(opciones_reimp))), format_func=lambda i: opciones_reimp[i], key="reimp_idx")
         row_reimp = df_reimp.iloc[idx_reimp]
         orderkey_reimp = row_reimp['ORDERKEY']
@@ -589,7 +631,7 @@ with tab3:
                 base_url,
                 json={"ORDERKEY": orderkey_buscar},
                 headers=headersWMX,
-                timeout=10
+                timeout=100
             )
             log_msg = f"[LOG] Respuesta: {response.status_code} {response.text}"
             print(log_msg)
@@ -612,11 +654,11 @@ with tab3:
                     st.write("Detalle de la orden:")
                     st.dataframe(detalle, use_container_width=True)
                     picks = paso_consulta(orderkey, headersWMX, tipo='pick')
-                    st.write("Picks:")
-                    st.write(picks)
+                    #st.write("Picks:")
+                    #st.write(picks)
                     cases = paso_consulta(orderkey, headersWMX, tipo='case')
-                    st.write("Cases:")
-                    st.write(cases)
+                    #st.write("Cases:")
+                    #st.write(cases)
                     if st.button("Reimprimir Picking List", key="reimp_orderkey"):
                         datos_etiqueta = obtener_datos_etiqueta(orderkey_hex, headersWMX, row_okey['EXTERNKEY'])
                         if not datos_etiqueta:
@@ -646,7 +688,7 @@ with tab_debug:
                 base_url,
                 json={"ORDERKEY": orderkey_debug},
                 headers=headersWMX,
-                timeout=10
+                timeout=100
             )
             log_msg = f"[DEBUG] Respuesta: {response.status_code} {response.text}"
             print(log_msg)
